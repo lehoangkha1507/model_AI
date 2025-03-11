@@ -1,55 +1,23 @@
 import streamlit as st
 import numpy as np
-import joblib
 from tensorflow import keras
-from fastapi import FastAPI
-from pydantic import BaseModel
-import uvicorn
-import threading
 
-# Load mô hình AI và scaler
+# Load mô hình AI và scaler (sử dụng NumPy để lưu và tải scaler thay vì joblib)
 model = keras.models.load_model('fs_model_fpt.h5', compile=False)
 model.compile(optimizer='adam', loss='mean_squared_error', metrics=['mae'])
-scaler = joblib.load('scaler.pkl')
+scaler_data = np.load('scaler.npy', allow_pickle=True).item()  # Thay thế joblib bằng numpy
 
-# FastAPI để cung cấp API
-api = FastAPI()
-
-# Định nghĩa dữ liệu đầu vào
-class InputData(BaseModel):
-    u: float
-    luong_mua: float
-    thoi_gian_mua: float
-    beta: float
+# Hàm chuẩn hóa dữ liệu (thay thế joblib)
+def scale_input(data):
+    return (data - scaler_data["mean"]) / scaler_data["std"]  # Chuẩn hóa bằng dữ liệu scaler đã lưu
 
 # Hàm dự đoán hệ số an toàn (FS)
 def predict_fs(u, luong_mua, thoi_gian_mua, beta):
-    input_data = np.array([[u, luong_mua, thoi_gian_mua, beta]])
-    input_data_scaled = scaler.transform(input_data)
-    fs_value = model.predict(input_data_scaled)[0][0]
-
-    if fs_value >= 1.5:
-        status = "✅ An toàn"
-    elif 1.0 <= fs_value < 1.5:
-        status = "⚠️ Cần kiểm tra"
-    else:
-        status = "❌ Nguy hiểm"
-
+    input_data = scale_input(np.array([[u, luong_mua, thoi_gian_mua, beta]]))
+    fs_value = model.predict(input_data)[0][0]
+    
+    status = "✅ An toàn" if fs_value >= 1.5 else "⚠️ Cần kiểm tra" if fs_value >= 1.0 else "❌ Nguy hiểm"
     return {"fs": fs_value, "status": status}
-
-# API để lấy dữ liệu FS
-@api.post("/api/predict")
-async def api_predict(data: InputData):
-    result = predict_fs(data.u, data.luong_mua, data.thoi_gian_mua, data.beta)
-    return result
-
-# Chạy FastAPI trên luồng riêng
-def run_api():
-    uvicorn.run(api, host="0.0.0.0", port=8502)
-
-# Tạo luồng để chạy FastAPI song song với Streamlit
-api_thread = threading.Thread(target=run_api, daemon=True)
-api_thread.start()
 
 # Giao diện Streamlit
 st.title("🛰️ Dự đoán Hệ Số An Toàn (FS)")
@@ -66,3 +34,6 @@ if st.button("🔍 Dự đoán Hệ Số An Toàn"):
     result = predict_fs(u, luong_mua, thoi_gian_mua, beta)
     st.success(f"🔮 Hệ số an toàn (FS): {result['fs']:.3f}")
     st.warning(f"🛑 Kết luận: {result['status']}")
+
+# API đơn giản ngay trên Streamlit (các web/app khác có thể gửi request đến URL này)
+st.json(result)
